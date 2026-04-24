@@ -1,3 +1,4 @@
+
 import os
 import re
 import html
@@ -38,7 +39,7 @@ MAX_ITEMS_FOR_GEMINI = 8
 FLOW_WEBHOOK_URL = os.environ["FLOW_WEBHOOK_URL"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-1.5-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 def clean_text(text):
