@@ -1,29 +1,28 @@
-name: Daily AI News to Zoho Cliq
-
+name: AI News to Zoho Flow
+ 
 on:
   schedule:
-    - cron: '30 9 * * 1-6'
+    - cron: '30 2 * * *'
   workflow_dispatch:
-
+ 
 jobs:
   send-news:
     runs-on: ubuntu-latest
+ 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
+ 
       - name: Install dependencies
-        run: |
-          pip install requests feedparser
-
+        run: pip install -r requirements.txt
+ 
       - name: Run bot
         env:
+          FLOW_WEBHOOK_URL: ${{ secrets.FLOW_WEBHOOK_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CLIQ_WEBHOOK_URL: ${{ secrets.CLIQ_WEBHOOK_URL }}
-        run: |
-          python scripts/ai_news.py
+        run: python scripts/ai_news.py
