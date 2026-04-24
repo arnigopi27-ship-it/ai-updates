@@ -1,0 +1,39 @@
+name: Daily AI Updates to Zoho Cliq
+
+on:
+  schedule:
+    - cron: '30 9 * * 1-6'
+  workflow_dispatch:
+
+jobs:
+  send-ai-updates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate AI Updates using Gemini
+        run: |
+          RESPONSE=$(curl -s \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "contents": [{
+                "parts": [{
+                  "text": "You are an AI updates curator for a tech team. Give me top 10 AI updates for today including: new AI model releases, AI tool updates, AI research breakthroughs, AI company announcements, new AI features in popular tools like ChatGPT, Claude, Gemini, Copilot etc. Format as numbered list with relevant emoji. Keep each point 1-2 lines. Make it useful and exciting for an AI development team."
+                }]
+              }]
+            }')
+
+          MESSAGE=$(echo $RESPONSE | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print(data['candidates'][0]['content']['parts'][0]['text'])
+          ")
+
+          echo "MESSAGE<<EOF" >> $GITHUB_ENV
+          echo "$MESSAGE" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Send AI Updates to Zoho Cliq
+        run: |
+          curl -X POST "${{ secrets.ZOHO_CLIQ_WEBHOOK_URL }}" \
+          -H "Content-Type: application/json" \
+          -d "{\"text\": \"🤖 *Daily AI Updates for the Team!*\n📅 $(date '+%A, %d %B %Y')\n\n$MESSAGE\n\n_Keep learning, Keep growing! 🚀_\"}"
