@@ -1,15 +1,10 @@
 import os
 import re
 import html
-import json
 import requests
 import feedparser
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
-
-# =========================
-# CONFIG
-# =========================
 
 FEEDS = [
     ("OpenAI", "https://openai.com/news/rss.xml"),
@@ -18,7 +13,6 @@ FEEDS = [
     ("MIT Technology Review AI", "https://www.technologyreview.com/topic/artificial-intelligence/feed/"),
     ("TechCrunch", "https://techcrunch.com/feed/"),
     ("VentureBeat", "https://feeds.venturebeat.com/VentureBeat"),
-
     ("Google News - AI launches", "https://news.google.com/rss/search?q=%28AI+OR+LLM+OR+%22foundation+model%22+OR+multimodal+OR+agent%29+%28launch+OR+release+OR+update+OR+announced%29+when:1d&hl=en-IN&gl=IN&ceid=IN:en"),
     ("Google News - AI companies", "https://news.google.com/rss/search?q=%28OpenAI+OR+Anthropic+OR+Google+DeepMind+OR+xAI+OR+Meta+AI+OR+Mistral+OR+Moonshot+AI+OR+DeepSeek+OR+Cohere+OR+Perplexity%29+when:1d&hl=en-IN&gl=IN&ceid=IN:en")
 ]
@@ -39,17 +33,13 @@ BAD_PATTERNS = [
 
 HOURS_BACK = 24
 MAX_ITEMS_BEFORE_SUMMARY = 12
-MAX_ITEMS_FOR_GEMINI = 6
+MAX_ITEMS_FOR_GEMINI = 8
 
-CLIQ_WEBHOOK_URL = os.environ["CLIQ_WEBHOOK_URL"]
+FLOW_WEBHOOK_URL = os.environ["FLOW_WEBHOOK_URL"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-
-# =========================
-# HELPERS
-# =========================
 
 def clean_text(text):
     text = html.unescape(text or "")
@@ -84,7 +74,8 @@ def fetch_feed_items():
     for source, url in FEEDS:
         try:
             feed = feedparser.parse(url)
-        except Exception:
+        except Exception as e:
+            print(f"Feed error from {source}: {e}")
             continue
 
         for entry in getattr(feed, "entries", []):
@@ -112,15 +103,17 @@ def fetch_feed_items():
                 "title": title,
                 "summary": summary[:500],
                 "link": link,
-                "published": published
+                "published": published.isoformat()
             })
 
     items.sort(key=lambda x: x["published"], reverse=True)
     return items[:MAX_ITEMS_BEFORE_SUMMARY]
 
 def build_gemini_prompt(items):
+    today = datetime.now(timezone.utc).strftime("%d %b %Y")
     lines = []
-    for i, item in enumerate(items, 1):
+
+    for i, item in enumerate(items[:MAX_ITEMS_FOR_GEMINI], 1):
         lines.append(
             f"{i}. Title: {item['title']}\n"
             f"   Source: {item['source']}\n"
@@ -128,48 +121,46 @@ def build_gemini_prompt(items):
             f"   Link: {item['link']}"
         )
 
-    item_block = "\n\n".join(lines)
+    joined = "\n\n".join(lines)
 
-    prompt = f"""
-You are preparing a concise daily AI news digest for a Zoho Cliq channel.
+    return f"""
+You are creating a concise AI news digest for a Zoho Cliq channel.
 
-Task:
-- Read the news items below.
-- Select the most important items.
-- Remove duplicates or near-duplicates.
-- Focus only on actual AI news such as model releases, major updates, product launches, company announcements, research, funding, regulation, or notable partnerships.
-- Ignore generic opinion pieces, job posts, tutorials, and low-value marketing posts.
+Rules:
+- Use only the news items provided.
+- Pick the most important and non-duplicate updates.
+- Focus on actual AI news: model releases, major updates, launches, research, partnerships, regulation, funding.
+- Ignore weak marketing style content.
+- Write in simple English.
+- Keep it short.
 
-Output rules:
-- Return plain text only.
-- Keep it short and clean for a team chat.
-- Start with: AI News Digest - {datetime.now(timezone.utc).strftime("%d %b %Y")}
-- Then add 4 to 6 bullet points.
-- Each bullet must contain:
-  - short headline rewritten in simple words
-  - why it matters in one short phrase
-  - source name
-- After bullets, add a section called "Links:" and list the selected article URLs, one per line.
-- Do not use markdown tables.
-- Do not invent facts.
-- If the items are weak, still return the best available ones.
+Output format:
+AI News Digest - {today}
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+- Bullet 4
+- Bullet 5
+
+Links:
+- full_url_1
+- full_url_2
+- full_url_3
+- full_url_4
+- full_url_5
 
 News items:
-{item_block}
+{joined}
 """.strip()
 
-    return prompt
-
 def summarize_with_gemini(items):
-    selected = items[:MAX_ITEMS_FOR_GEMINI]
-    prompt = build_gemini_prompt(selected)
-
     payload = {
         "contents": [
             {
                 "role": "user",
                 "parts": [
-                    {"text": prompt}
+                    {"text": build_gemini_prompt(items)}
                 ]
             }
         ]
@@ -186,56 +177,65 @@ def summarize_with_gemini(items):
 
     candidates = data.get("candidates", [])
     if not candidates:
-        raise ValueError("No Gemini candidates returned")
+        raise ValueError("No candidates returned from Gemini")
 
     parts = candidates[0].get("content", {}).get("parts", [])
     text = "".join(part.get("text", "") for part in parts).strip()
 
     if not text:
-        raise ValueError("Empty Gemini response")
+        raise ValueError("Gemini returned empty text")
 
     return text
 
-def fallback_digest(items):
+def build_fallback_message(items):
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
 
     if not items:
         return f"AI News Digest - {today}\n\nNo strong AI news found in the last {HOURS_BACK} hours."
 
     lines = [f"AI News Digest - {today}", ""]
-    for item in items[:6]:
+    for item in items[:5]:
         lines.append(f"- {item['title']} ({item['source']})")
     lines.append("")
     lines.append("Links:")
-    for item in items[:6]:
-        lines.append(item["link"])
+    for item in items[:5]:
+        lines.append(f"- {item['link']}")
     return "\n".join(lines)
 
-def post_to_cliq(message):
+def post_to_flow(message, items):
     payload = {
-        "text": message
+        "text": message,
+        "items_count": len(items),
+        "items": items,
+        "source": "github-actions-ai-news-bot",
+        "sent_at": datetime.now(timezone.utc).isoformat()
     }
-    resp = requests.post(CLIQ_WEBHOOK_URL, json=payload, timeout=30)
+
+    resp = requests.post(FLOW_WEBHOOK_URL, json=payload, timeout=30)
+    print("Flow status:", resp.status_code)
+    print("Flow response:", resp.text[:500])
     resp.raise_for_status()
 
-# =========================
-# MAIN
-# =========================
-
 def main():
+    print("Fetching feed items...")
     items = fetch_feed_items()
+    print(f"Filtered items: {len(items)}")
 
     if not items:
-        message = fallback_digest([])
-        post_to_cliq(message)
+        message = build_fallback_message([])
+        post_to_flow(message, [])
         return
 
     try:
+        print("Summarizing with Gemini...")
         message = summarize_with_gemini(items)
-    except Exception:
-        message = fallback_digest(items)
+    except Exception as e:
+        print(f"Gemini failed, using fallback. Error: {e}")
+        message = build_fallback_message(items)
 
-    post_to_cliq(message)
+    print("Posting to Zoho Flow...")
+    post_to_flow(message, items)
+    print("Done.")
 
 if __name__ == "__main__":
     main()
