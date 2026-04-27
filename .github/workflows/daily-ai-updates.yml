@@ -1,28 +1,30 @@
-name: AI News to Zoho Flow
- 
+name: Daily AI News to Notion
+
 on:
   schedule:
-    - cron: '30 2 * * *'
+    - cron: '30 3 * * 1-6'
   workflow_dispatch:
- 
+
 jobs:
   send-news:
     runs-on: ubuntu-latest
- 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
- 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
- 
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
- 
+        run: |
+          pip install requests feedparser
+
       - name: Run bot
         env:
-          FLOW_WEBHOOK_URL: ${{ secrets.FLOW_WEBHOOK_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python scripts/ai_news.py
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+        run: |
+          python scripts/ai_news.py
