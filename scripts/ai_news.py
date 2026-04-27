@@ -1,4 +1,3 @@
-
 import os
 import re
 import html
@@ -11,35 +10,23 @@ FEEDS = [
     ("OpenAI", "https://openai.com/news/rss.xml"),
     ("Hugging Face", "https://huggingface.co/blog/feed.xml"),
     ("Google AI Blog", "https://blog.google/technology/ai/rss/"),
-    ("MIT Technology Review AI", "https://www.technologyreview.com/topic/artificial-intelligence/feed/"),
     ("TechCrunch", "https://techcrunch.com/feed/"),
     ("VentureBeat", "https://feeds.venturebeat.com/VentureBeat"),
-    ("Google News - AI launches", "https://news.google.com/rss/search?q=%28AI+OR+LLM+OR+%22foundation+model%22+OR+multimodal+OR+agent%29+%28launch+OR+release+OR+update+OR+announced%29+when:1d&hl=en-IN&gl=IN&ceid=IN:en"),
-    ("Google News - AI companies", "https://news.google.com/rss/search?q=%28OpenAI+OR+Anthropic+OR+Google+DeepMind+OR+xAI+OR+Meta+AI+OR+Mistral+OR+Moonshot+AI+OR+DeepSeek+OR+Cohere+OR+Perplexity%29+when:1d&hl=en-IN&gl=IN&ceid=IN:en")
 ]
 
 KEYWORDS = [
-    "ai", "artificial intelligence", "llm", "model", "agent", "agents",
-    "multimodal", "reasoning", "inference", "open source", "release",
-    "launch", "launched", "announced", "announcement", "update", "upgrades",
-    "openai", "anthropic", "google deepmind", "deepmind", "gemini",
-    "meta ai", "xai", "grok", "mistral", "moonshot", "kimi",
-    "deepseek", "cohere", "perplexity", "claude", "gpt"
-]
-
-BAD_PATTERNS = [
-    "job", "hiring", "career", "course", "tutorial", "webinar",
-    "coupon", "discount", "sponsored", "affiliate"
+    "ai", "artificial intelligence", "llm", "model", "agent",
+    "multimodal", "release", "launch", "announced",
+    "openai", "anthropic", "gemini", "claude", "gpt", "deepseek"
 ]
 
 HOURS_BACK = 24
-MAX_ITEMS_BEFORE_SUMMARY = 12
-MAX_ITEMS_FOR_GEMINI = 8
+MAX_ITEMS = 6
 
-FLOW_WEBHOOK_URL = os.environ["FLOW_WEBHOOK_URL"]
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+NOTION_PAGE_ID = os.environ["NOTION_PAGE_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 def clean_text(text):
@@ -47,9 +34,6 @@ def clean_text(text):
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
-def normalize_title(title):
-    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 def parse_entry_date(entry):
     for key in ("published", "updated", "created"):
@@ -62,115 +46,61 @@ def parse_entry_date(entry):
 
 def looks_relevant(title, summary=""):
     hay = f"{title} {summary}".lower()
-    if any(bad in hay for bad in BAD_PATTERNS):
-        return False
     return any(keyword in hay for keyword in KEYWORDS)
 
 def fetch_feed_items():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
     items = []
     seen_links = set()
-    seen_titles = set()
 
     for source, url in FEEDS:
         try:
             feed = feedparser.parse(url)
-        except Exception as e:
-            print(f"Feed error from {source}: {e}")
+        except Exception:
             continue
 
         for entry in getattr(feed, "entries", []):
-            title = clean_text(entry.get("title", "No title"))
+            title = clean_text(entry.get("title", ""))
             summary = clean_text(entry.get("summary", ""))
             link = entry.get("link", "").strip()
             published = parse_entry_date(entry) or datetime.now(timezone.utc)
 
-            if not link:
+            if not link or link in seen_links:
                 continue
             if published < cutoff:
                 continue
             if not looks_relevant(title, summary):
                 continue
 
-            norm_title = normalize_title(title)
-            if link in seen_links or norm_title in seen_titles:
-                continue
-
             seen_links.add(link)
-            seen_titles.add(norm_title)
-
             items.append({
                 "source": source,
                 "title": title,
-                "summary": summary[:500],
+                "summary": summary[:300],
                 "link": link,
-                "published": published.isoformat()
+                "published": published
             })
 
     items.sort(key=lambda x: x["published"], reverse=True)
-    return items[:MAX_ITEMS_BEFORE_SUMMARY]
-
-def build_gemini_prompt(items):
-    today = datetime.now(timezone.utc).strftime("%d %b %Y")
-    lines = []
-
-    for i, item in enumerate(items[:MAX_ITEMS_FOR_GEMINI], 1):
-        lines.append(
-            f"{i}. Title: {item['title']}\n"
-            f"   Source: {item['source']}\n"
-            f"   Summary: {item['summary']}\n"
-            f"   Link: {item['link']}"
-        )
-
-    joined = "\n\n".join(lines)
-
-    return f"""
-You are creating a concise AI news digest for a Zoho Cliq channel.
-
-Rules:
-- Use only the news items provided.
-- Pick the most important and non-duplicate updates.
-- Focus on actual AI news: model releases, major updates, launches, research, partnerships, regulation, funding.
-- Ignore weak marketing style content.
-- Write in simple English.
-- Keep it short.
-
-Output format:
-AI News Digest - {today}
-
-- Bullet 1
-- Bullet 2
-- Bullet 3
-- Bullet 4
-- Bullet 5
-
-Links:
-- full_url_1
-- full_url_2
-- full_url_3
-- full_url_4
-- full_url_5
-
-News items:
-{joined}
-""".strip()
+    return items[:MAX_ITEMS]
 
 def summarize_with_gemini(items):
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": build_gemini_prompt(items)}
-                ]
-            }
-        ]
-    }
+    lines = []
+    for i, item in enumerate(items, 1):
+        lines.append(f"{i}. {item['title']} ({item['source']})\n   {item['summary']}")
 
-    headers = {
-        "x-goog-api-key": GEMINI_API_KEY,
-        "Content-Type": "application/json"
-    }
+    prompt = f"""
+You are preparing a daily AI news digest for a tech team.
+Summarize these news items clearly with emoji.
+Format: numbered list. Keep each point 1-2 lines.
+Date: {datetime.now(timezone.utc).strftime("%d %b %Y")}
+
+News:
+{chr(10).join(lines)}
+""".strip()
+
+    payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
 
     resp = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=60)
     resp.raise_for_status()
@@ -178,65 +108,86 @@ def summarize_with_gemini(items):
 
     candidates = data.get("candidates", [])
     if not candidates:
-        raise ValueError("No candidates returned from Gemini")
+        raise ValueError("No candidates")
 
     parts = candidates[0].get("content", {}).get("parts", [])
-    text = "".join(part.get("text", "") for part in parts).strip()
+    return "".join(part.get("text", "") for part in parts).strip()
 
-    if not text:
-        raise ValueError("Gemini returned empty text")
-
-    return text
-
-def build_fallback_message(items):
+def post_to_notion(summary, items):
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
 
-    if not items:
-        return f"AI News Digest - {today}\n\nNo strong AI news found in the last {HOURS_BACK} hours."
-
-    lines = [f"AI News Digest - {today}", ""]
-    for item in items[:5]:
-        lines.append(f"- {item['title']} ({item['source']})")
-    lines.append("")
-    lines.append("Links:")
-    for item in items[:5]:
-        lines.append(f"- {item['link']}")
-    return "\n".join(lines)
-
-def post_to_flow(message, items):
-    payload = {
-        "text": message,
-        "items_count": len(items),
-        "items": items,
-        "source": "github-actions-ai-news-bot",
-        "sent_at": datetime.now(timezone.utc).isoformat()
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
     }
 
-    resp = requests.post(FLOW_WEBHOOK_URL, json=payload, timeout=30)
-    print("Flow status:", resp.status_code)
-    print("Flow response:", resp.text[:500])
+    blocks = [
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": f"🤖 AI News - {today}"}}]
+            }
+        },
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": summary}}]
+            }
+        },
+        {
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {
+                "rich_text": [{"type": "text", "text": {"content": "📰 Source Links"}}]
+            }
+        }
+    ]
+
+    for item in items:
+        blocks.append({
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": f"{item['title']} ({item['source']})",
+                            "link": {"url": item['link']}
+                        }
+                    }
+                ]
+            }
+        })
+
+    blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+    url = f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children"
+    resp = requests.patch(url, headers=headers, json={"children": blocks}, timeout=30)
+    print(f"Notion status: {resp.status_code}")
     resp.raise_for_status()
 
 def main():
     print("Fetching feed items...")
     items = fetch_feed_items()
-    print(f"Filtered items: {len(items)}")
+    print(f"Found {len(items)} items")
 
     if not items:
-        message = build_fallback_message([])
-        post_to_flow(message, [])
-        return
+        summary = f"No AI news found today ({datetime.now(timezone.utc).strftime('%d %b %Y')})"
+    else:
+        try:
+            print("Summarizing with Gemini...")
+            summary = summarize_with_gemini(items)
+        except Exception as e:
+            print(f"Gemini failed: {e}")
+            summary = "\n".join([f"• {item['title']} ({item['source']})" for item in items])
 
-    try:
-        print("Summarizing with Gemini...")
-        message = summarize_with_gemini(items)
-    except Exception as e:
-        print(f"Gemini failed, using fallback. Error: {e}")
-        message = build_fallback_message(items)
-
-    print("Posting to Zoho Flow...")
-    post_to_flow(message, items)
-    print("Done.")
+    print("Posting to Notion...")
+    post_to_notion(summary, items)
+    print("Done! ✅")
 
 if __name__ == "__main__":
     main()
