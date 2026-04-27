@@ -8,20 +8,33 @@ from email.utils import parsedate_to_datetime
 
 FEEDS = [
     ("OpenAI", "https://openai.com/news/rss.xml"),
-    ("Hugging Face", "https://huggingface.co/blog/feed.xml"),
+    ("Anthropic", "https://www.anthropic.com/rss.xml"),
+    ("Google DeepMind", "https://deepmind.google/blog/rss.xml"),
     ("Google AI Blog", "https://blog.google/technology/ai/rss/"),
-    ("TechCrunch", "https://techcrunch.com/feed/"),
-    ("VentureBeat", "https://feeds.venturebeat.com/VentureBeat"),
+    ("Meta AI", "https://ai.meta.com/blog/rss/"),
+    ("Microsoft AI", "https://blogs.microsoft.com/ai/feed/"),
+    ("Hugging Face", "https://huggingface.co/blog/feed.xml"),
+    ("TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/"),
+    ("VentureBeat AI", "https://venturebeat.com/category/ai/feed/"),
+    ("The Verge AI", "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml"),
+    ("MIT Tech Review", "https://www.technologyreview.com/topic/artificial-intelligence/feed/"),
+    ("Ars Technica AI", "https://arstechnica.com/tag/ai/feed/"),
+    ("ArXiv AI", "https://arxiv.org/rss/cs.AI"),
+    ("Google News AI", "https://news.google.com/rss/search?q=AI+model+release+OR+launch+when:1d&hl=en-IN&gl=IN&ceid=IN:en"),
+    ("Google News LLM", "https://news.google.com/rss/search?q=ChatGPT+OR+Claude+OR+Gemini+OR+Grok+when:1d&hl=en-IN&gl=IN&ceid=IN:en"),
 ]
 
 KEYWORDS = [
-    "ai", "artificial intelligence", "llm", "model", "agent",
-    "multimodal", "release", "launch", "announced",
-    "openai", "anthropic", "gemini", "claude", "gpt", "deepseek"
+    "ai", "artificial intelligence", "machine learning", "llm",
+    "release", "launch", "announced", "update", "new model",
+    "openai", "anthropic", "google deepmind", "meta ai",
+    "microsoft ai", "mistral", "hugging face", "xai",
+    "gpt", "claude", "gemini", "grok", "llama", "deepseek",
+    "chatgpt", "copilot", "multimodal", "agent", "generative ai",
 ]
 
 HOURS_BACK = 24
-MAX_ITEMS = 6
+MAX_ITEMS = 10
 
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_PAGE_ID = os.environ["NOTION_PAGE_ID"]
@@ -52,11 +65,14 @@ def fetch_feed_items():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
     items = []
     seen_links = set()
+    seen_titles = set()
 
     for source, url in FEEDS:
         try:
             feed = feedparser.parse(url)
-        except Exception:
+            print(f"Fetched {source}: {len(feed.entries)} entries")
+        except Exception as e:
+            print(f"Failed {source}: {e}")
             continue
 
         for entry in getattr(feed, "entries", []):
@@ -67,12 +83,15 @@ def fetch_feed_items():
 
             if not link or link in seen_links:
                 continue
+            if title.lower() in seen_titles:
+                continue
             if published < cutoff:
                 continue
             if not looks_relevant(title, summary):
                 continue
 
             seen_links.add(link)
+            seen_titles.add(title.lower())
             items.append({
                 "source": source,
                 "title": title,
@@ -82,20 +101,29 @@ def fetch_feed_items():
             })
 
     items.sort(key=lambda x: x["published"], reverse=True)
+    print(f"Total relevant items: {len(items)}")
     return items[:MAX_ITEMS]
 
 def summarize_with_gemini(items):
     lines = []
     for i, item in enumerate(items, 1):
-        lines.append(f"{i}. {item['title']} ({item['source']})\n   {item['summary']}")
+        lines.append(
+            f"{i}. {item['title']} ({item['source']})\n"
+            f"   {item['summary']}"
+        )
 
     prompt = f"""
-You are preparing a daily AI news digest for a tech team.
-Summarize these news items clearly with emoji.
-Format: numbered list. Keep each point 1-2 lines.
-Date: {datetime.now(timezone.utc).strftime("%d %b %Y")}
+You are preparing a daily AI news digest for a tech team in India.
+Today's date: {datetime.now(timezone.utc).strftime("%d %b %Y")}
 
-News:
+Task:
+- Summarize the most important AI news from today
+- Focus on: model releases, tool updates, company announcements, research breakthroughs
+- Format as numbered list with relevant emoji
+- Keep each point 1-2 lines max
+- Make it exciting and useful for an AI development team
+
+News items:
 {chr(10).join(lines)}
 """.strip()
 
@@ -127,7 +155,7 @@ def post_to_notion(summary, items):
             "object": "block",
             "type": "heading_2",
             "heading_2": {
-                "rich_text": [{"type": "text", "text": {"content": f"🤖 AI News - {today}"}}]
+                "rich_text": [{"type": "text", "text": {"content": f"🤖 AI News Digest - {today}"}}]
             }
         },
         {
@@ -141,7 +169,7 @@ def post_to_notion(summary, items):
             "object": "block",
             "type": "heading_3",
             "heading_3": {
-                "rich_text": [{"type": "text", "text": {"content": "📰 Source Links"}}]
+                "rich_text": [{"type": "text", "text": {"content": f"📰 Source Links ({len(items)} articles)"}}]
             }
         }
     ]
@@ -171,9 +199,9 @@ def post_to_notion(summary, items):
     resp.raise_for_status()
 
 def main():
-    print("Fetching feed items...")
+    print("Fetching AI news from multiple sources...")
     items = fetch_feed_items()
-    print(f"Found {len(items)} items")
+    print(f"Found {len(items)} relevant items")
 
     if not items:
         summary = f"No AI news found today ({datetime.now(timezone.utc).strftime('%d %b %Y')})"
@@ -181,6 +209,7 @@ def main():
         try:
             print("Summarizing with Gemini...")
             summary = summarize_with_gemini(items)
+            print("Gemini summarization done!")
         except Exception as e:
             print(f"Gemini failed: {e}")
             summary = "\n".join([f"• {item['title']} ({item['source']})" for item in items])
